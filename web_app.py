@@ -86,6 +86,14 @@ if uploaded_files:
     final_qty.drop(columns=['bar_code'], inplace=True)
     final_dates.drop(columns=['bar_code'], inplace=True)
 
+    # --- Reorder columns: put product info right after კოდი ---
+    prod_cols = ['export_code','prod_desc','category','price']
+    qty_cols = ['კოდი'] + prod_cols + [c for c in final_qty.columns if c not in ['კოდი'] + prod_cols]
+    final_qty = final_qty[qty_cols]
+
+    date_cols = ['კოდი'] + prod_cols + [c for c in final_dates.columns if c not in ['კოდი'] + prod_cols]
+    final_dates = final_dates[date_cols]
+
     # --- Show tables ---
     st.subheader("Quantities with Product Info")
     st.dataframe(final_qty)
@@ -136,4 +144,3 @@ if uploaded_files:
         file_name="combined_locations_with_prod_info.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
