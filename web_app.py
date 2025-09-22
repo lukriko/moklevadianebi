@@ -87,7 +87,7 @@ if uploaded_files:
     final_dates.drop(columns=['bar_code'], inplace=True)
 
     # --- Ensure product columns exist (avoid KeyError) ---
-    prod_cols = ['export_code','prod_desc','category','price']
+    prod_cols = ['export_code','prod_description','category','price']
     for col in prod_cols:
         if col not in final_qty.columns:
             final_qty[col] = None
@@ -156,3 +156,4 @@ if uploaded_files:
         file_name="combined_locations_with_prod_info.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
