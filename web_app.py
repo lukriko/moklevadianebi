@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill, Border, Side, Alignment
+from openpyxl.styles import PatternFill, Border, Side, Alignment, Font
 
 st.title("Excel Merger: Quantities & Dates")
 
@@ -62,21 +62,23 @@ if uploaded_files:
     final_qty['კოდი'] = final_qty['კოდი'].astype(str)
     final_dates['კოდი'] = final_dates['კოდი'].astype(str)
 
-    # --- Show tables ---
+    # --- Show tables in Streamlit ---
     st.subheader("Quantities")
     st.dataframe(final_qty)
 
     st.subheader("Matched Dates")
     st.dataframe(final_dates)
 
-    # --- Save to Excel in memory ---
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    # --- Save initial Excel to memory ---
+    temp_output = BytesIO()
+    with pd.ExcelWriter(temp_output, engine='openpyxl') as writer:
         final_qty.to_excel(writer, sheet_name='Quantities', index=False)
         final_dates.to_excel(writer, sheet_name='Matched Dates', index=False)
 
-    # Open workbook to format
-    wb = load_workbook(output)
+    temp_output.seek(0)
+
+    # --- Open workbook for formatting ---
+    wb = load_workbook(temp_output)
 
     # Define styles
     red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
@@ -84,34 +86,42 @@ if uploaded_files:
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin')
     )
+    header_font = Font(bold=True)
+    align_center = Alignment(horizontal="center", vertical="center")
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
 
-        # Apply autofit + borders + alignment
+        # Apply styles
         for col in ws.columns:
             max_length = 0
             column_letter = col[0].column_letter
             for cell in col:
-                # Apply border
+                # Borders
                 cell.border = thin_border
-                # Apply alignment
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-                # Check for red fill in Matched Dates
-                if sheet_name == 'Matched Dates' and cell.value == "":
+                # Alignment
+                cell.alignment = align_center
+                # Header bold
+                if cell.row == 1:
+                    cell.font = header_font
+                # Red fill for Matched Dates blanks
+                if sheet_name == 'Matched Dates' and cell.row > 1 and cell.value == "":
                     cell.fill = red_fill
-                # Track max length for autofit
+                # Track max length
                 if cell.value is not None:
                     max_length = max(max_length, len(str(cell.value)))
-            # Set column width
+            # Autofit column width
             ws.column_dimensions[column_letter].width = max_length + 2  # padding
 
-    wb.save(output)
-    output.seek(0)
+    # --- Save formatted workbook to new BytesIO ---
+    final_output = BytesIO()
+    wb.save(final_output)
+    final_output.seek(0)
 
+    # --- Download button ---
     st.download_button(
         label="Download Combined Excel",
-        data=output,
+        data=final_output,
         file_name="combined_locations.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
