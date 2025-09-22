@@ -16,7 +16,7 @@ if not os.path.exists(prod_line_path):
 prod_line = pd.read_excel(prod_line_path)
 prod_line.columns = prod_line.columns.str.strip()  # normalize
 
-required_prod_cols = ['bar_code','export_code','prod_description','category','price']
+required_prod_cols = ['export_code','prod_description','category','price']
 for col in required_prod_cols:
     if col not in prod_line.columns:
         st.error(f"Column '{col}' missing in prod_line.xlsx")
@@ -144,3 +144,4 @@ if uploaded_files:
         file_name="combined_locations_with_prod_info.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
