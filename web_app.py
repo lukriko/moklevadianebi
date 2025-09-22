@@ -16,7 +16,7 @@ if not os.path.exists(prod_line_path):
 prod_line = pd.read_excel(prod_line_path)
 prod_line.columns = prod_line.columns.str.strip()  # normalize
 
-required_prod_cols = ['export_code','prod_description','category','price']
+required_prod_cols = ['bar_code','export_code','prod_description','category','price']
 for col in required_prod_cols:
     if col not in prod_line.columns:
         st.error(f"Column '{col}' missing in prod_line.xlsx")
@@ -86,8 +86,15 @@ if uploaded_files:
     final_qty.drop(columns=['bar_code'], inplace=True)
     final_dates.drop(columns=['bar_code'], inplace=True)
 
-    # --- Reorder columns: put product info right after კოდი ---
+    # --- Ensure product columns exist (avoid KeyError) ---
     prod_cols = ['export_code','prod_desc','category','price']
+    for col in prod_cols:
+        if col not in final_qty.columns:
+            final_qty[col] = None
+        if col not in final_dates.columns:
+            final_dates[col] = None
+
+    # --- Reorder columns: put product info right after კოდი ---
     qty_cols = ['კოდი'] + prod_cols + [c for c in final_qty.columns if c not in ['კოდი'] + prod_cols]
     final_qty = final_qty[qty_cols]
 
@@ -127,8 +134,13 @@ if uploaded_files:
                 cell.alignment = align_center
                 if cell.row == 1:
                     cell.font = header_font
+                # Highlight blank cells in Matched Dates
                 if sheet_name == 'Matched Dates' and cell.row > 1 and cell.value == "":
                     cell.fill = red_fill
+                # Highlight unmatched product codes in red
+                if sheet_name in ['Quantities','Matched Dates'] and cell.column_letter in ['B','C','D','E']:  # product info columns
+                    if cell.value is None:
+                        cell.fill = red_fill
                 if cell.value is not None:
                     max_length = max(max_length, len(str(cell.value)))
             ws.column_dimensions[column_letter].width = max_length + 2
@@ -144,4 +156,3 @@ if uploaded_files:
         file_name="combined_locations_with_prod_info.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
