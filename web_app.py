@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Border, Side, Alignment
 
 st.title("Excel Merger: Quantities & Dates")
 
@@ -75,16 +75,36 @@ if uploaded_files:
         final_qty.to_excel(writer, sheet_name='Quantities', index=False)
         final_dates.to_excel(writer, sheet_name='Matched Dates', index=False)
 
-    # Highlight blank cells in Matched Dates
+    # Open workbook to format
     wb = load_workbook(output)
-    ws_dates = wb['Matched Dates']
-    red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
 
-    for row in range(2, ws_dates.max_row + 1):
-        for col in range(2, ws_dates.max_column + 1):
-            cell = ws_dates.cell(row=row, column=col)
-            if cell.value == "":
-                cell.fill = red_fill
+    # Define styles
+    red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+
+        # Apply autofit + borders + alignment
+        for col in ws.columns:
+            max_length = 0
+            column_letter = col[0].column_letter
+            for cell in col:
+                # Apply border
+                cell.border = thin_border
+                # Apply alignment
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                # Check for red fill in Matched Dates
+                if sheet_name == 'Matched Dates' and cell.value == "":
+                    cell.fill = red_fill
+                # Track max length for autofit
+                if cell.value is not None:
+                    max_length = max(max_length, len(str(cell.value)))
+            # Set column width
+            ws.column_dimensions[column_letter].width = max_length + 2  # padding
 
     wb.save(output)
     output.seek(0)
