@@ -15,13 +15,11 @@ if not os.path.exists(prod_line_path):
 
 prod_line = pd.read_excel(prod_line_path)
 prod_line.columns = prod_line.columns.str.strip()  # normalize
-
 required_prod_cols = ['bar_code','export_code','prod_description','category','price']
 for col in required_prod_cols:
     if col not in prod_line.columns:
         st.error(f"Column '{col}' missing in prod_line.xlsx")
         st.stop()
-
 prod_line['bar_code'] = prod_line['bar_code'].astype(str)
 
 # --- Upload multiple Excel files ---
@@ -30,8 +28,7 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    df_list = []
-    dates_list = []
+    df_list, dates_list, missing_dates_dict = [], [], {}
 
     for uploaded_file in uploaded_files:
         location = uploaded_file.name.split(".")[0]
@@ -47,20 +44,18 @@ if uploaded_files:
         if 'წელი' not in df.columns:
             df['წელი'] = None
 
+        # --- Track missing dates for this file ---
+        missing_dates = df[(df['თვე'].isna()) | (df['წელი'].isna())]['კოდი'].tolist()
+        missing_dates_dict[location] = missing_dates
+
         # --- Quantities ---
         df_qty = df.groupby('კოდი', as_index=False)['რაოდენობა'].sum().rename(columns={'რაოდენობა': location})
         df_list.append(df_qty)
 
         # --- Dates ---
         df_dates = df.groupby('კოდი', as_index=False).agg({'თვე':'first', 'წელი':'first'})
-
-        def format_date(row):
-            if pd.notnull(row['თვე']) and pd.notnull(row['წელი']):
-                return f"{int(row['თვე']):02d}/{int(row['წელი'])}"
-            else:
-                return ""
-
-        df_dates[location] = df_dates.apply(format_date, axis=1)
+        df_dates[location] = df_dates.apply(lambda row: f"{int(row['თვე']):02d}/{int(row['წელი'])}" 
+                                            if pd.notnull(row['თვე']) and pd.notnull(row['წელი']) else "", axis=1)
         df_dates = df_dates[['კოდი', location]]
         dates_list.append(df_dates)
 
@@ -79,14 +74,12 @@ if uploaded_files:
     # --- Merge with product info ---
     final_qty['კოდი'] = final_qty['კოდი'].astype(str)
     final_dates['კოდი'] = final_dates['კოდი'].astype(str)
-
     final_qty = pd.merge(final_qty, prod_line, left_on='კოდი', right_on='bar_code', how='left')
     final_dates = pd.merge(final_dates, prod_line, left_on='კოდი', right_on='bar_code', how='left')
-
     final_qty.drop(columns=['bar_code'], inplace=True)
     final_dates.drop(columns=['bar_code'], inplace=True)
 
-    # --- Ensure product columns exist (avoid KeyError) ---
+    # --- Ensure product columns exist ---
     prod_cols = ['export_code','prod_description','category','price']
     for col in prod_cols:
         if col not in final_qty.columns:
@@ -94,17 +87,15 @@ if uploaded_files:
         if col not in final_dates.columns:
             final_dates[col] = None
 
-    # --- Reorder columns: put product info right after კოდი ---
+    # --- Reorder columns ---
     qty_cols = ['კოდი'] + prod_cols + [c for c in final_qty.columns if c not in ['კოდი'] + prod_cols]
     final_qty = final_qty[qty_cols]
-
     date_cols = ['კოდი'] + prod_cols + [c for c in final_dates.columns if c not in ['კოდი'] + prod_cols]
     final_dates = final_dates[date_cols]
 
     # --- Show tables ---
     st.subheader("Quantities with Product Info")
     st.dataframe(final_qty)
-
     st.subheader("Matched Dates with Product Info")
     st.dataframe(final_dates)
 
@@ -113,7 +104,6 @@ if uploaded_files:
     with pd.ExcelWriter(temp_output, engine='openpyxl') as writer:
         final_qty.to_excel(writer, sheet_name='Quantities', index=False)
         final_dates.to_excel(writer, sheet_name='Matched Dates', index=False)
-
     temp_output.seek(0)
     wb = load_workbook(temp_output)
 
@@ -127,23 +117,28 @@ if uploaded_files:
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         for col in ws.columns:
-            max_length = 0
             column_letter = col[0].column_letter
             for cell in col:
                 cell.border = thin_border
                 cell.alignment = align_center
                 if cell.row == 1:
                     cell.font = header_font
-                # Highlight blank cells in Matched Dates
-                if sheet_name == 'Matched Dates' and cell.row > 1 and cell.value == "":
-                    cell.fill = red_fill
-                # Highlight unmatched product codes in red
-                if sheet_name in ['Quantities','Matched Dates'] and cell.column_letter in ['B','C','D','E']:  # product info columns
+
+                # Highlight missing month/year per file & location
+                if sheet_name in ['Quantities','Matched Dates'] and cell.row > 1:
+                    kode = ws.cell(row=cell.row, column=1).value
+                    loc_name = ws.cell(row=1, column=cell.column).value
+                    if loc_name in missing_dates_dict and kode in missing_dates_dict[loc_name]:
+                        cell.fill = red_fill
+
+                # Highlight unmatched product info
+                if sheet_name in ['Quantities','Matched Dates'] and column_letter in ['B','C','D','E']:
                     if cell.value is None:
                         cell.fill = red_fill
+
+                # Adjust column width
                 if cell.value is not None:
-                    max_length = max(max_length, len(str(cell.value)))
-            ws.column_dimensions[column_letter].width = max_length + 2
+                    ws.column_dimensions[column_letter].width = max(ws.column_dimensions[column_letter].width, len(str(cell.value)) + 2)
 
     final_output = BytesIO()
     wb.save(final_output)
@@ -156,4 +151,3 @@ if uploaded_files:
         file_name="combined_locations_with_prod_info.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
