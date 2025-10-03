@@ -34,6 +34,7 @@ if uploaded_files:
     df_list = []
     dates_list = []
     highlight_dict = {}  # track kodes that need red-fill per location
+    original_sheets = {}  # store original uploaded files to append later
 
     for uploaded_file in uploaded_files:
         location = uploaded_file.name.split(".")[0]
@@ -52,6 +53,13 @@ if uploaded_files:
         # unify code format
         df['კოდი'] = df['კოდი'].astype(str).str.strip().str.lstrip("0")
 
+        # --- store original file for appending later ---
+        df_copy_for_sheet = df.copy()
+        # Merge product info for this sheet
+        df_copy_for_sheet = pd.merge(df_copy_for_sheet, prod_line, left_on='კოდი', right_on='bar_code', how='left')
+        df_copy_for_sheet.drop(columns=['bar_code'], inplace=True)
+        original_sheets[location] = df_copy_for_sheet
+
         # --- Quantities ---
         df_qty = df.groupby('კოდი', as_index=False)['რაოდენობა'].sum().rename(columns={'რაოდენობა': location})
         df_list.append(df_qty)
@@ -64,15 +72,13 @@ if uploaded_files:
         df_dates['წელი_num'] = pd.to_numeric(df_dates['წელი'], errors='coerce')
 
         # Collect kodes that need highlighting:
-        # (a) missing month or year
-        # (b) month < 9 while year exists
         kodes_to_highlight = df_dates[
             (df_dates['თვე_num'].isna()) |
             (df_dates['წელი_num'].isna()) |
             ((df_dates['წელი_num'] == 2025) & (df_dates['თვე_num'] < 10))
         ]['კოდი'].astype(str).tolist()
-        
         highlight_dict[location] = kodes_to_highlight
+
         # format month/year as MM/YYYY
         def format_date(row):
             if pd.notnull(row['თვე_num']) and pd.notnull(row['წელი_num']):
@@ -127,13 +133,17 @@ if uploaded_files:
     # --- Save to Excel in memory ---
     temp_output = BytesIO()
     with pd.ExcelWriter(temp_output, engine='openpyxl') as writer:
+        # write merged sheets
         final_qty.to_excel(writer, sheet_name='Quantities', index=False)
         final_dates.to_excel(writer, sheet_name='Matched Dates', index=False)
+        # write each original file sheet with product info merged
+        for sheet_name, df_orig in original_sheets.items():
+            df_orig.to_excel(writer, sheet_name=sheet_name[:31], index=False)
 
     temp_output.seek(0)
     wb = load_workbook(temp_output)
 
-    # --- Formatting ---
+    # --- Formatting and auto-sizing ---
     red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
                          top=Side(style='thin'), bottom=Side(style='thin'))
@@ -154,23 +164,23 @@ if uploaded_files:
                     max_length = max(max_length, len(str(cell.value)))
             ws.column_dimensions[column_letter].width = max_length + 2
 
-    # --- Highlight cells for missing or early (<Sep) dates ---
-    for sheet_name in ['Quantities', 'Matched Dates']:
+    # --- Highlight cells for missing or early (<Oct 2025) dates ---
+    for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        for loc, highlight_kodes in highlight_dict.items():
-            # find the column index of this location
-            col_idx = None
-            for idx, cell in enumerate(ws[1], start=1):
-                if cell.value == loc:
-                    col_idx = idx
-                    break
-            if col_idx is None:
-                continue
-            # loop rows to check codes
-            for row_idx in range(2, ws.max_row + 1):
-                kode = ws.cell(row=row_idx, column=1).value  # column A = 'კოდი'
-                if str(kode) in highlight_kodes:
-                    ws.cell(row=row_idx, column=col_idx).fill = red_fill
+        # only apply highlighting if sheet matches a location
+        if sheet_name in highlight_dict:
+            for loc, highlight_kodes in highlight_dict.items():
+                col_idx = None
+                for idx, cell in enumerate(ws[1], start=1):
+                    if cell.value == 'კოდი':
+                        col_idx = idx
+                        break
+                if col_idx is None:
+                    continue
+                for row_idx in range(2, ws.max_row + 1):
+                    kode = ws.cell(row=row_idx, column=col_idx).value
+                    if str(kode) in highlight_kodes:
+                        ws.cell(row=row_idx, column=col_idx).fill = red_fill
 
     final_output = BytesIO()
     wb.save(final_output)
@@ -183,5 +193,3 @@ if uploaded_files:
         file_name="combined_locations_with_prod_info.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
-
