@@ -34,7 +34,7 @@ if uploaded_files:
     df_list = []
     dates_list = []
     highlight_dict = {}  # track kodes that need red-fill per location
-    original_sheets = {}  # store original uploaded files to append later
+    per_file_sheets = {}  # store per-file sheets for appending later
 
     for uploaded_file in uploaded_files:
         location = uploaded_file.name.split(".")[0]
@@ -53,25 +53,16 @@ if uploaded_files:
         # unify code format
         df['კოდი'] = df['კოდი'].astype(str).str.strip().str.lstrip("0")
 
-        # --- store original file for appending later ---
-        df_copy_for_sheet = df.copy()
-        # Merge product info for this sheet
-        df_copy_for_sheet = pd.merge(df_copy_for_sheet, prod_line, left_on='კოდი', right_on='bar_code', how='left')
-        df_copy_for_sheet.drop(columns=['bar_code'], inplace=True)
-        original_sheets[location] = df_copy_for_sheet
-
-        # --- Quantities ---
+        # --- Quantities for merged sheet ---
         df_qty = df.groupby('კოდი', as_index=False)['რაოდენობა'].sum().rename(columns={'რაოდენობა': location})
         df_list.append(df_qty)
 
-        # --- Dates ---
+        # --- Dates for merged sheet ---
         df_dates = df.groupby('კოდი', as_index=False).agg({'თვე':'first', 'წელი':'first'})
-
-        # Safe numeric conversion
         df_dates['თვე_num'] = pd.to_numeric(df_dates['თვე'], errors='coerce')
         df_dates['წელი_num'] = pd.to_numeric(df_dates['წელი'], errors='coerce')
 
-        # Collect kodes that need highlighting:
+        # Collect kodes that need highlighting
         kodes_to_highlight = df_dates[
             (df_dates['თვე_num'].isna()) |
             (df_dates['წელი_num'].isna()) |
@@ -79,16 +70,23 @@ if uploaded_files:
         ]['კოდი'].astype(str).tolist()
         highlight_dict[location] = kodes_to_highlight
 
-        # format month/year as MM/YYYY
+        # Format month/year
         def format_date(row):
             if pd.notnull(row['თვე_num']) and pd.notnull(row['წელი_num']):
                 return f"{int(row['თვე_num']):02d}/{int(row['წელი_num'])}"
             else:
                 return ""
-
         df_dates[location] = df_dates.apply(format_date, axis=1)
         df_dates = df_dates[['კოდი', location]]
         dates_list.append(df_dates)
+
+        # --- Prepare per-file sheet ---
+        df_file = df.copy()
+        df_file = pd.merge(df_file, prod_line, left_on='კოდი', right_on='bar_code', how='left')
+        df_file.drop(columns=['bar_code'], inplace=True)
+        # Add index column at the very left
+        df_file.insert(0, 'Index', range(1, len(df_file)+1))
+        per_file_sheets[location] = df_file
 
     # --- Merge Quantities ---
     final_qty = df_list[0]
@@ -105,7 +103,6 @@ if uploaded_files:
     # --- Merge with product info ---
     final_qty = pd.merge(final_qty, prod_line, left_on='კოდი', right_on='bar_code', how='left')
     final_dates = pd.merge(final_dates, prod_line, left_on='კოდი', right_on='bar_code', how='left')
-
     final_qty.drop(columns=['bar_code'], inplace=True)
     final_dates.drop(columns=['bar_code'], inplace=True)
 
@@ -119,39 +116,36 @@ if uploaded_files:
     # --- Reorder columns ---
     qty_cols = ['კოდი'] + prod_cols + [c for c in final_qty.columns if c not in ['კოდი'] + prod_cols]
     final_qty = final_qty[qty_cols]
-
     date_cols = ['კოდი'] + prod_cols + [c for c in final_dates.columns if c not in ['კოდი'] + prod_cols]
     final_dates = final_dates[date_cols]
 
     # --- Show tables ---
     st.subheader("Quantities with Product Info")
     st.dataframe(final_qty)
-
     st.subheader("Matched Dates with Product Info")
     st.dataframe(final_dates)
 
-    # --- Save to Excel in memory ---
+    # --- Save to Excel ---
     temp_output = BytesIO()
     with pd.ExcelWriter(temp_output, engine='openpyxl') as writer:
-        # write merged sheets
+        # main merged sheets
         final_qty.to_excel(writer, sheet_name='Quantities', index=False)
         final_dates.to_excel(writer, sheet_name='Matched Dates', index=False)
-        # write each original file sheet with product info merged
-        for sheet_name, df_orig in original_sheets.items():
-            df_orig.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+        # uploaded files with product info
+        for sheet_name, df_file in per_file_sheets.items():
+            df_file.to_excel(writer, sheet_name=sheet_name[:31], index=False)
 
     temp_output.seek(0)
     wb = load_workbook(temp_output)
 
-    # --- Formatting and auto-sizing ---
+    # --- Formatting ---
     red_fill = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
                          top=Side(style='thin'), bottom=Side(style='thin'))
     header_font = Font(bold=True)
     align_center = Alignment(horizontal="center", vertical="center")
 
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
+    for ws in wb.worksheets:
         for col in ws.columns:
             column_letter = col[0].column_letter
             max_length = 0
@@ -164,29 +158,50 @@ if uploaded_files:
                     max_length = max(max_length, len(str(cell.value)))
             ws.column_dimensions[column_letter].width = max_length + 2
 
-    # --- Highlight cells for missing or early (<Oct 2025) dates ---
-    for sheet_name in wb.sheetnames:
+    # --- Highlight missing/early dates in main sheets ---
+    for sheet_name in ['Quantities', 'Matched Dates']:
         ws = wb[sheet_name]
-        # only apply highlighting if sheet matches a location
-        if sheet_name in highlight_dict:
-            for loc, highlight_kodes in highlight_dict.items():
-                col_idx = None
-                for idx, cell in enumerate(ws[1], start=1):
-                    if cell.value == 'კოდი':
-                        col_idx = idx
-                        break
-                if col_idx is None:
-                    continue
-                for row_idx in range(2, ws.max_row + 1):
-                    kode = ws.cell(row=row_idx, column=col_idx).value
-                    if str(kode) in highlight_kodes:
-                        ws.cell(row=row_idx, column=col_idx).fill = red_fill
+        for loc, highlight_kodes in highlight_dict.items():
+            # find column index of location
+            col_idx = None
+            for idx, cell in enumerate(ws[1], start=1):
+                if cell.value == loc:
+                    col_idx = idx
+                    break
+            if col_idx is None:
+                continue
+            for row_idx in range(2, ws.max_row + 1):
+                kode = ws.cell(row=row_idx, column=1).value
+                if str(kode) in highlight_kodes:
+                    ws.cell(row=row_idx, column=col_idx).fill = red_fill
+
+    # --- Highlight missing/early dates in per-file sheets ---
+    for sheet_name, df_file in per_file_sheets.items():
+        ws = wb[sheet_name[:31]]
+        # find column index of 'თვე' or 'წელი' for highlighting
+        col_idx = None
+        for idx, cell in enumerate(ws[1], start=1):
+            if cell.value in ['თვე','წელი']:
+                col_idx = idx
+                break
+        if col_idx is None:
+            continue
+        for row_idx in range(2, ws.max_row + 1):
+            try:
+                month_cell = ws.cell(row=row_idx, column=ws[1].index(next(c for c in ws[1] if c.value=='თვე'))+1).value
+                year_cell = ws.cell(row=row_idx, column=ws[1].index(next(c for c in ws[1] if c.value=='წელი'))+1).value
+                month = pd.to_numeric(month_cell, errors='coerce')
+                year = pd.to_numeric(year_cell, errors='coerce')
+                if pd.isna(month) or pd.isna(year) or (year==2025 and month<10):
+                    for cell in ws[row_idx]:
+                        cell.fill = red_fill
+            except:
+                continue
 
     final_output = BytesIO()
     wb.save(final_output)
     final_output.seek(0)
 
-    # --- Download button ---
     st.download_button(
         label="Download Combined Excel with Product Info",
         data=final_output,
