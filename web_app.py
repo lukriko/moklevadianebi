@@ -33,8 +33,7 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     df_list = []
     dates_list = []
-    missing_dates_dict = {}  # track missing dates per location
-    early_dates_dict = {}    # track dates before September
+    highlight_dict = {}  # track kodes that need red-fill per location
 
     for uploaded_file in uploaded_files:
         location = uploaded_file.name.split(".")[0]
@@ -60,20 +59,22 @@ if uploaded_files:
         # --- Dates ---
         df_dates = df.groupby('კოდი', as_index=False).agg({'თვე':'first', 'წელი':'first'})
 
-        # Track missing dates
-        missing_kodes = df_dates[df_dates['თვე'].isna() | df_dates['წელი'].isna()]['კოდი'].astype(str).tolist()
-        missing_dates_dict[location] = missing_kodes
+        # Safe numeric conversion
+        df_dates['თვე_num'] = pd.to_numeric(df_dates['თვე'], errors='coerce')
+        df_dates['წელი_num'] = pd.to_numeric(df_dates['წელი'], errors='coerce')
 
-        # Track dates earlier than September
-        early_kodes = df_dates[
-            df_dates['თვე'].notna() & df_dates['წელი'].notna() &
-            (df_dates['თვე'].astype(int) < 9)
+        # Collect kodes that need highlighting:
+        # (a) missing month or year
+        # (b) month < 9 while year exists
+        kodes_to_highlight = df_dates[
+            df_dates['თვე_num'].isna() | df_dates['წელი_num'].isna() | (df_dates['თვე_num'] < 9)
         ]['კოდი'].astype(str).tolist()
-        early_dates_dict[location] = early_kodes
+        highlight_dict[location] = kodes_to_highlight
 
+        # format month/year as MM/YYYY
         def format_date(row):
-            if pd.notnull(row['თვე']) and pd.notnull(row['წელი']):
-                return f"{int(row['თვე']):02d}/{int(row['წელი'])}"
+            if pd.notnull(row['თვე_num']) and pd.notnull(row['წელი_num']):
+                return f"{int(row['თვე_num']):02d}/{int(row['წელი_num'])}"
             else:
                 return ""
 
@@ -151,10 +152,11 @@ if uploaded_files:
                     max_length = max(max_length, len(str(cell.value)))
             ws.column_dimensions[column_letter].width = max_length + 2
 
-    # --- Highlight missing & early dates ---
+    # --- Highlight cells for missing or early (<Sep) dates ---
     for sheet_name in ['Quantities', 'Matched Dates']:
         ws = wb[sheet_name]
-        for loc, missing_kodes in missing_dates_dict.items():
+        for loc, highlight_kodes in highlight_dict.items():
+            # find the column index of this location
             col_idx = None
             for idx, cell in enumerate(ws[1], start=1):
                 if cell.value == loc:
@@ -162,13 +164,10 @@ if uploaded_files:
                     break
             if col_idx is None:
                 continue
+            # loop rows to check codes
             for row_idx in range(2, ws.max_row + 1):
-                kode = ws.cell(row=row_idx, column=1).value
-                # missing date highlight
-                if str(kode) in missing_kodes:
-                    ws.cell(row=row_idx, column=col_idx).fill = red_fill
-                # early than September highlight
-                if str(kode) in early_dates_dict.get(loc, []):
+                kode = ws.cell(row=row_idx, column=1).value  # column A = 'კოდი'
+                if str(kode) in highlight_kodes:
                     ws.cell(row=row_idx, column=col_idx).fill = red_fill
 
     final_output = BytesIO()
