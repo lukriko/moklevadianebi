@@ -22,7 +22,8 @@ for col in required_prod_cols:
         st.error(f"Column '{col}' missing in prod_line.xlsx")
         st.stop()
 
-prod_line['bar_code'] = prod_line['bar_code'].astype(str)
+# unify codes as strings with no leading zeros/whitespace
+prod_line['bar_code'] = prod_line['bar_code'].astype(str).str.strip().str.lstrip("0")
 
 # --- Upload multiple Excel files ---
 uploaded_files = st.file_uploader(
@@ -33,6 +34,7 @@ if uploaded_files:
     df_list = []
     dates_list = []
     missing_dates_dict = {}  # track missing dates per location
+    early_dates_dict = {}    # track dates before September
 
     for uploaded_file in uploaded_files:
         location = uploaded_file.name.split(".")[0]
@@ -48,6 +50,9 @@ if uploaded_files:
         if 'წელი' not in df.columns:
             df['წელი'] = None
 
+        # unify code format
+        df['კოდი'] = df['კოდი'].astype(str).str.strip().str.lstrip("0")
+
         # --- Quantities ---
         df_qty = df.groupby('კოდი', as_index=False)['რაოდენობა'].sum().rename(columns={'რაოდენობა': location})
         df_list.append(df_qty)
@@ -58,6 +63,13 @@ if uploaded_files:
         # Track missing dates
         missing_kodes = df_dates[df_dates['თვე'].isna() | df_dates['წელი'].isna()]['კოდი'].astype(str).tolist()
         missing_dates_dict[location] = missing_kodes
+
+        # Track dates earlier than September
+        early_kodes = df_dates[
+            df_dates['თვე'].notna() & df_dates['წელი'].notna() &
+            (df_dates['თვე'].astype(int) < 9)
+        ]['კოდი'].astype(str).tolist()
+        early_dates_dict[location] = early_kodes
 
         def format_date(row):
             if pd.notnull(row['თვე']) and pd.notnull(row['წელი']):
@@ -82,9 +94,6 @@ if uploaded_files:
     final_dates = final_dates.fillna("")
 
     # --- Merge with product info ---
-    final_qty['კოდი'] = final_qty['კოდი'].astype(str)
-    final_dates['კოდი'] = final_dates['კოდი'].astype(str)
-
     final_qty = pd.merge(final_qty, prod_line, left_on='კოდი', right_on='bar_code', how='left')
     final_dates = pd.merge(final_dates, prod_line, left_on='კოდი', right_on='bar_code', how='left')
 
@@ -142,11 +151,10 @@ if uploaded_files:
                     max_length = max(max_length, len(str(cell.value)))
             ws.column_dimensions[column_letter].width = max_length + 2
 
-    # --- Highlight missing dates per location ---
+    # --- Highlight missing & early dates ---
     for sheet_name in ['Quantities', 'Matched Dates']:
         ws = wb[sheet_name]
         for loc, missing_kodes in missing_dates_dict.items():
-            # find the column index of this location
             col_idx = None
             for idx, cell in enumerate(ws[1], start=1):
                 if cell.value == loc:
@@ -154,10 +162,13 @@ if uploaded_files:
                     break
             if col_idx is None:
                 continue
-            # loop rows to check missing codes
             for row_idx in range(2, ws.max_row + 1):
-                kode = ws.cell(row=row_idx, column=1).value  # column A = 'კოდი'
+                kode = ws.cell(row=row_idx, column=1).value
+                # missing date highlight
                 if str(kode) in missing_kodes:
+                    ws.cell(row=row_idx, column=col_idx).fill = red_fill
+                # early than September highlight
+                if str(kode) in early_dates_dict.get(loc, []):
                     ws.cell(row=row_idx, column=col_idx).fill = red_fill
 
     final_output = BytesIO()
