@@ -66,11 +66,13 @@ if uploaded_files:
         # Collect kodes that need highlighting:
         # (a) missing month or year
         # (b) month < 9 while year exists
-        kodes_to_highlight = df_dates[
-            df_dates['თვე_num'].isna() | df_dates['წელი_num'].isna() | (df_dates['თვე_num'] < 9)
+       kodes_to_highlight = df_dates[
+            (df_dates['თვე_num'].isna()) |
+            (df_dates['წელი_num'].isna()) |
+            ((df_dates['წელი_num'] == 2025) & (df_dates['თვე_num'] < 10))
         ]['კოდი'].astype(str).tolist()
+        
         highlight_dict[location] = kodes_to_highlight
-
         # format month/year as MM/YYYY
         def format_date(row):
             if pd.notnull(row['თვე_num']) and pd.notnull(row['წელი_num']):
@@ -181,3 +183,4 @@ if uploaded_files:
         file_name="combined_locations_with_prod_info.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
