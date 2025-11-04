@@ -3,6 +3,7 @@ import pandas as pd
 from io import BytesIO
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Border, Side, Alignment, Font
+from datetime import datetime
 import os
 
 st.title("Excel Merger: Quantities & Dates with Product Info")
@@ -18,8 +19,7 @@ def clean_code(x):
     s = str(x).strip()
     if s.endswith(".0"):
         s = s[:-2]
-    s = s.strip()
-    return s
+    return s.strip()
 
 def clean_code_fixed(x):
     """Convert to exactly 13-digit string (keeps leading zeros)."""
@@ -28,9 +28,7 @@ def clean_code_fixed(x):
     s = str(x).strip().split('.')[0]
     return s.zfill(13)
 
-# Toggle whether to keep fixed-length 13-digit codes
 keep_fixed_length = st.checkbox("Keep 13-digit zero-padded codes (EAN-style)?", value=False)
-
 clean_func = clean_code_fixed if keep_fixed_length else clean_code
 
 # ============================================================
@@ -43,7 +41,7 @@ if not os.path.exists(prod_line_path):
     st.stop()
 
 prod_line = pd.read_excel(prod_line_path)
-prod_line.columns = prod_line.columns.str.strip()  # normalize
+prod_line.columns = prod_line.columns.str.strip()
 
 required_prod_cols = ['bar_code', 'export_code', 'prod_description', 'category', 'price']
 for col in required_prod_cols:
@@ -51,7 +49,6 @@ for col in required_prod_cols:
         st.error(f"Column '{col}' missing in prod_line.xlsx")
         st.stop()
 
-# Clean barcode format
 prod_line['bar_code'] = prod_line['bar_code'].apply(clean_func)
 
 # ============================================================
@@ -65,10 +62,12 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    df_list = []
-    dates_list = []
-    highlight_dict = {}  # track codes that need red-fill per location
-    per_file_sheets = {}  # store per-file sheets for appending later
+    df_list, dates_list = [], []
+    highlight_dict, per_file_sheets = {}, {}
+
+    # current date for dynamic comparison
+    today = datetime.today()
+    cur_year, cur_month = today.year, today.month
 
     for uploaded_file in uploaded_files:
         location = uploaded_file.name.split(".")[0]
@@ -84,7 +83,6 @@ if uploaded_files:
         if 'წელი' not in df.columns:
             df['წელი'] = None
 
-        # Clean code format
         df['კოდი'] = df['კოდი'].apply(clean_func)
 
         # --- Quantities for merged sheet ---
@@ -100,15 +98,17 @@ if uploaded_files:
         df_dates['თვე_num'] = pd.to_numeric(df_dates['თვე'], errors='coerce')
         df_dates['წელი_num'] = pd.to_numeric(df_dates['წელი'], errors='coerce')
 
-        # Collect codes to highlight
+        # --- Highlight condition (dynamic date) ---
         kodes_to_highlight = df_dates[
             (df_dates['თვე_num'].isna()) |
             (df_dates['წელი_num'].isna()) |
-            ((df_dates['წელი_num'] == 2025) & (df_dates['თვე_num'] < 10))
+            (
+                (df_dates['წელი_num'] < cur_year) |
+                ((df_dates['წელი_num'] == cur_year) & (df_dates['თვე_num'] < cur_month))
+            )
         ]['კოდი'].astype(str).tolist()
         highlight_dict[location] = kodes_to_highlight
 
-        # Format month/year
         def format_date(row):
             if pd.notnull(row['თვე_num']) and pd.notnull(row['წელი_num']):
                 return f"{int(row['თვე_num']):02d}/{int(row['წელი_num'])}"
@@ -120,8 +120,7 @@ if uploaded_files:
         dates_list.append(df_dates)
 
         # --- Prepare per-file sheet ---
-        df_file = df.copy()
-        df_file = pd.merge(df_file, prod_line, left_on='კოდი', right_on='bar_code', how='left')
+        df_file = pd.merge(df.copy(), prod_line, left_on='კოდი', right_on='bar_code', how='left')
         df_file.drop(columns=['bar_code'], inplace=True)
         df_file.insert(0, 'Index', range(1, len(df_file) + 1))
         per_file_sheets[location] = df_file
@@ -140,26 +139,29 @@ if uploaded_files:
         final_dates = pd.merge(final_dates, df, on='კოდი', how='outer')
     final_dates = final_dates.fillna("")
 
-    # Merge with product info
     final_qty = pd.merge(final_qty, prod_line, left_on='კოდი', right_on='bar_code', how='left')
     final_dates = pd.merge(final_dates, prod_line, left_on='კოდი', right_on='bar_code', how='left')
     final_qty.drop(columns=['bar_code'], inplace=True)
     final_dates.drop(columns=['bar_code'], inplace=True)
 
     prod_cols = ['export_code', 'prod_description', 'category', 'price']
-    for col in prod_cols:
-        if col not in final_qty.columns:
-            final_qty[col] = None
-        if col not in final_dates.columns:
-            final_dates[col] = None
-
     qty_cols = ['კოდი'] + prod_cols + [c for c in final_qty.columns if c not in ['კოდი'] + prod_cols]
     date_cols = ['კოდი'] + prod_cols + [c for c in final_dates.columns if c not in ['კოდი'] + prod_cols]
     final_qty = final_qty[qty_cols]
     final_dates = final_dates[date_cols]
 
     # ============================================================
-    # 4️⃣ SHOW DATA IN STREAMLIT
+    # 4️⃣ REMOVE BLANK ROWS
+    # ============================================================
+
+    final_qty = final_qty[final_qty['კოდი'].notna()]
+    final_qty = final_qty[~(final_qty.iloc[:, len(prod_cols)+1:] == 0).all(axis=1)]
+
+    final_dates = final_dates[final_dates['კოდი'].notna()]
+    final_dates = final_dates[~(final_dates.iloc[:, len(prod_cols)+1:] == "").all(axis=1)]
+
+    # ============================================================
+    # 5️⃣ DISPLAY IN STREAMLIT
     # ============================================================
 
     st.subheader("📊 Quantities with Product Info")
@@ -168,7 +170,7 @@ if uploaded_files:
     st.dataframe(final_dates)
 
     # ============================================================
-    # 5️⃣ SAVE TO EXCEL WITH FORMATTING
+    # 6️⃣ SAVE TO EXCEL WITH FORMATTING & HIGHLIGHTS
     # ============================================================
 
     temp_output = BytesIO()
@@ -200,7 +202,7 @@ if uploaded_files:
                     max_length = max(max_length, len(str(cell.value)))
             ws.column_dimensions[column_letter].width = max_length + 2
 
-    # --- Highlight missing/early dates in main sheets ---
+    # --- Highlight main sheets ---
     for sheet_name in ['Quantities', 'Matched Dates']:
         ws = wb[sheet_name]
         for loc, highlight_kodes in highlight_dict.items():
@@ -216,11 +218,10 @@ if uploaded_files:
                 if kode in highlight_kodes:
                     ws.cell(row=row_idx, column=col_idx).fill = red_fill
 
-    # --- Highlight per-file sheets ---
+    # --- Highlight per-file sheets dynamically ---
     for sheet_name, df_file in per_file_sheets.items():
         ws = wb[sheet_name[:31]]
-        month_col = None
-        year_col = None
+        month_col = year_col = None
         for idx, cell in enumerate(ws[1], start=1):
             if cell.value == 'თვე':
                 month_col = idx
@@ -232,10 +233,12 @@ if uploaded_files:
             try:
                 month = pd.to_numeric(ws.cell(row=row_idx, column=month_col).value, errors='coerce')
                 year = pd.to_numeric(ws.cell(row=row_idx, column=year_col).value, errors='coerce')
-                if pd.isna(month) or pd.isna(year) or (year == 2025 and month < 10):
+                if pd.isna(month) or pd.isna(year) or (
+                    (year < cur_year) or ((year == cur_year) and (month < cur_month))
+                ):
                     for cell in ws[row_idx]:
                         cell.fill = red_fill
-            except:
+            except Exception:
                 continue
 
     final_output = BytesIO()
